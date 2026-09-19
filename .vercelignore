@@ -1,0 +1,6 @@
+.venv
+data
+tests
+alembic
+.env
+*.db

@@ -4,3 +4,5 @@ __pycache__/
 dev.db
 data/
 .env
+.env.production
+.vercel/
