@@ -101,6 +101,12 @@ uvicorn app.main:app --reload
 
 [alembic/versions/85bb9bf67302_initial_schema.py](alembic/versions/85bb9bf67302_initial_schema.py) に初期マイグレーションがあります。ローカルから、`.env.production`の`DATABASE_URL`を使って実行します。
 
+PowerShell:
+```powershell
+$env:DATABASE_URL="<.env.productionのDATABASE_URLの値>"; python -m alembic upgrade head
+```
+
+bash(Git Bash等):
 ```bash
 DATABASE_URL="<.env.productionのDATABASE_URLの値>" python -m alembic upgrade head
 ```
@@ -109,6 +115,12 @@ DATABASE_URL="<.env.productionのDATABASE_URLの値>" python -m alembic upgrade 
 
 `app.seed`は`DATABASE_URL`環境変数を見て接続先を切り替えるので、同様に実行できます。
 
+PowerShell:
+```powershell
+$env:DATABASE_URL="<.env.productionのDATABASE_URLの値>"; python -m app.seed
+```
+
+bash(Git Bash等):
 ```bash
 DATABASE_URL="<.env.productionのDATABASE_URLの値>" python -m app.seed
 ```
