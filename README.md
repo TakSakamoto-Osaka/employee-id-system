@@ -163,7 +163,148 @@ DATABASE_URL="<.env.productionのDATABASE_URLの値>" python -m app.seed
    python -m alembic upgrade head --sql > migration.sql
    ```
 2. 生成された`migration.sql`の内容をSupabaseダッシュボードの「SQL Editor」に貼り付けて実行
-3. マスターデータも同様に、必要なINSERT文を手動で作成してSQL Editorで実行する
+3. マスターデータ投入用のSQLも同様にSQL Editorで実行する
+
+以下は、現時点のスキーマ(初期マイグレーション`85bb9bf67302`)にそのまま対応する、コピーしてすぐ使えるSQLです。モデルを変更した場合は上記1の手順で最新のSQLを生成し直してください。
+
+#### テーブル作成SQL
+
+```sql
+CREATE TABLE alembic_version (
+    version_num VARCHAR(32) NOT NULL,
+    CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num)
+);
+
+CREATE TABLE audit_logs (
+    id VARCHAR(36) NOT NULL, actor VARCHAR(100) NOT NULL, action VARCHAR(100) NOT NULL,
+    target_type VARCHAR(50) NOT NULL, target_id VARCHAR(100), details JSON NOT NULL,
+    request_id VARCHAR(100), created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL, PRIMARY KEY (id)
+);
+
+CREATE TABLE companies (
+    id VARCHAR(36) NOT NULL, code VARCHAR(50) NOT NULL, name VARCHAR(200) NOT NULL,
+    active BOOLEAN NOT NULL, PRIMARY KEY (id)
+);
+CREATE UNIQUE INDEX ix_companies_code ON companies (code);
+
+CREATE TABLE counters (
+    name VARCHAR(50) NOT NULL, value BIGINT NOT NULL, PRIMARY KEY (name)
+);
+
+CREATE TABLE employee_batches (
+    id VARCHAR(36) NOT NULL, caller_id VARCHAR(100) NOT NULL, status VARCHAR(20) NOT NULL,
+    total_count INTEGER NOT NULL, created_count INTEGER NOT NULL, existing_count INTEGER NOT NULL,
+    review_required_count INTEGER NOT NULL, error_count INTEGER NOT NULL, cancelled_count INTEGER NOT NULL,
+    cancel_requested BOOLEAN NOT NULL, created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+    started_at TIMESTAMP WITHOUT TIME ZONE, finished_at TIMESTAMP WITHOUT TIME ZONE, PRIMARY KEY (id)
+);
+
+CREATE TABLE employees (
+    id VARCHAR(36) NOT NULL, unified_employee_number VARCHAR(9) NOT NULL,
+    english_name_original VARCHAR(200) NOT NULL, english_name_normalized VARCHAR(200) NOT NULL,
+    normalization_version INTEGER NOT NULL, date_of_birth DATE NOT NULL, status VARCHAR(20) NOT NULL,
+    version INTEGER NOT NULL, created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+    updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL, created_by VARCHAR(100), updated_by VARCHAR(100),
+    PRIMARY KEY (id)
+);
+CREATE INDEX ix_employees_name_dob ON employees (english_name_normalized, date_of_birth);
+CREATE UNIQUE INDEX ix_employees_unified_employee_number ON employees (unified_employee_number);
+
+CREATE TABLE idempotency_records (
+    id VARCHAR(36) NOT NULL, caller_id VARCHAR(100) NOT NULL, idempotency_key VARCHAR(200) NOT NULL,
+    request_hash VARCHAR(64) NOT NULL, endpoint VARCHAR(100) NOT NULL, status_code INTEGER NOT NULL,
+    response_body JSON NOT NULL, created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+    expires_at TIMESTAMP WITHOUT TIME ZONE NOT NULL, PRIMARY KEY (id),
+    CONSTRAINT uq_idem_caller_key UNIQUE (caller_id, idempotency_key)
+);
+
+CREATE TABLE import_jobs (
+    id VARCHAR(36) NOT NULL, file_reference VARCHAR(500) NOT NULL, original_filename VARCHAR(255) NOT NULL,
+    executed_by VARCHAR(100) NOT NULL, company_scope VARCHAR(50), status VARCHAR(20) NOT NULL,
+    total_count INTEGER NOT NULL, created_count INTEGER NOT NULL, existing_count INTEGER NOT NULL,
+    review_count INTEGER NOT NULL, error_count INTEGER NOT NULL, cancelled_count INTEGER NOT NULL,
+    cancel_requested BOOLEAN NOT NULL, preview_new_count INTEGER NOT NULL, preview_existing_count INTEGER NOT NULL,
+    preview_review_count INTEGER NOT NULL, created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+    started_at TIMESTAMP WITHOUT TIME ZONE, finished_at TIMESTAMP WITHOUT TIME ZONE, PRIMARY KEY (id)
+);
+
+CREATE TABLE match_locks (
+    key VARCHAR(64) NOT NULL, PRIMARY KEY (key)
+);
+
+CREATE TABLE employee_number_aliases (
+    id VARCHAR(36) NOT NULL, alias_number VARCHAR(9) NOT NULL, target_employee_id VARCHAR(36) NOT NULL,
+    reason TEXT NOT NULL, performed_by VARCHAR(100) NOT NULL, performed_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+    PRIMARY KEY (id), FOREIGN KEY(target_employee_id) REFERENCES employees (id), UNIQUE (alias_number)
+);
+
+CREATE TABLE identity_reviews (
+    id VARCHAR(36) NOT NULL, input_data JSON NOT NULL, candidate_employee_id VARCHAR(36),
+    company_id VARCHAR(36), reason VARCHAR(50) NOT NULL, status VARCHAR(20) NOT NULL,
+    resolution_employee_id VARCHAR(36), resolved_by VARCHAR(100), resolved_at TIMESTAMP WITHOUT TIME ZONE,
+    created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL, PRIMARY KEY (id),
+    FOREIGN KEY(candidate_employee_id) REFERENCES employees (id),
+    FOREIGN KEY(company_id) REFERENCES companies (id),
+    FOREIGN KEY(resolution_employee_id) REFERENCES employees (id)
+);
+
+CREATE TABLE organizations (
+    id VARCHAR(36) NOT NULL, company_id VARCHAR(36) NOT NULL, code VARCHAR(50) NOT NULL,
+    name VARCHAR(200) NOT NULL, parent_organization_id VARCHAR(36), active BOOLEAN NOT NULL,
+    PRIMARY KEY (id), FOREIGN KEY(company_id) REFERENCES companies (id),
+    FOREIGN KEY(parent_organization_id) REFERENCES organizations (id),
+    CONSTRAINT uq_org_company_code UNIQUE (company_id, code)
+);
+
+CREATE TABLE employee_affiliations (
+    id VARCHAR(36) NOT NULL, employee_id VARCHAR(36) NOT NULL, company_id VARCHAR(36) NOT NULL,
+    organization_id VARCHAR(36), existing_employee_number VARCHAR(100), job_title VARCHAR(200),
+    remarks TEXT, effective_start_date DATE, effective_end_date DATE,
+    created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL, updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+    PRIMARY KEY (id), FOREIGN KEY(company_id) REFERENCES companies (id),
+    FOREIGN KEY(employee_id) REFERENCES employees (id),
+    FOREIGN KEY(organization_id) REFERENCES organizations (id)
+);
+CREATE UNIQUE INDEX uq_affiliation_company_existing_number ON employee_affiliations (company_id, existing_employee_number) WHERE existing_employee_number IS NOT NULL;
+
+CREATE TABLE employee_batch_records (
+    id VARCHAR(36) NOT NULL, batch_id VARCHAR(36) NOT NULL, record_index INTEGER NOT NULL,
+    client_record_id VARCHAR(100) NOT NULL, input_data JSON NOT NULL, status VARCHAR(20) NOT NULL,
+    employee_id VARCHAR(36), unified_employee_number VARCHAR(9), review_id VARCHAR(36),
+    error_code VARCHAR(50), error_message VARCHAR(500), processed_at TIMESTAMP WITHOUT TIME ZONE,
+    PRIMARY KEY (id), FOREIGN KEY(batch_id) REFERENCES employee_batches (id),
+    FOREIGN KEY(employee_id) REFERENCES employees (id),
+    FOREIGN KEY(review_id) REFERENCES identity_reviews (id),
+    CONSTRAINT uq_batch_client_record_id UNIQUE (batch_id, client_record_id),
+    CONSTRAINT uq_batch_record_index UNIQUE (batch_id, record_index)
+);
+
+CREATE TABLE import_rows (
+    id VARCHAR(36) NOT NULL, job_id VARCHAR(36) NOT NULL, row_number INTEGER NOT NULL,
+    input_data JSON NOT NULL, status VARCHAR(20) NOT NULL, employee_id VARCHAR(36),
+    unified_employee_number VARCHAR(9), review_id VARCHAR(36), error_code VARCHAR(50),
+    error_message VARCHAR(500), processed_at TIMESTAMP WITHOUT TIME ZONE, PRIMARY KEY (id),
+    FOREIGN KEY(employee_id) REFERENCES employees (id), FOREIGN KEY(job_id) REFERENCES import_jobs (id),
+    FOREIGN KEY(review_id) REFERENCES identity_reviews (id),
+    CONSTRAINT uq_import_job_row UNIQUE (job_id, row_number)
+);
+
+INSERT INTO alembic_version (version_num) VALUES ('85bb9bf67302');
+```
+
+#### マスターデータ投入SQL
+
+```sql
+INSERT INTO companies (id, code, name, active) VALUES
+  ('e513d4a8-e668-4f14-b050-f579f0b7d164', 'JP001', 'Example Japan K.K.', true),
+  ('69894f48-eefc-452c-8f69-8d41beb03f08', 'US001', 'Example US Inc.', true);
+
+INSERT INTO organizations (id, company_id, code, name, active) VALUES
+  ('5cb3b5d7-9ca0-4938-a341-e3b829ede544', 'e513d4a8-e668-4f14-b050-f579f0b7d164', 'SALES01', 'Sales Division', true),
+  ('9b2ba67f-7ae4-4982-ab23-e53cfa200d9c', 'e513d4a8-e668-4f14-b050-f579f0b7d164', 'HR01', 'Human Resources', true),
+  ('786ddd8e-b2ae-435b-8f3e-48e0d856616d', '69894f48-eefc-452c-8f69-8d41beb03f08', 'HR01', 'Human Resources', true),
+  ('a9a5d9f0-8caf-4883-b5e3-801025862c58', '69894f48-eefc-452c-8f69-8d41beb03f08', 'ENG01', 'Engineering', true);
+```
 
 ### `git push`で権限エラー(403)になる
 
